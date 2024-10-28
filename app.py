@@ -4,6 +4,9 @@ import torch.nn.functional as F
 from torch import nn
 import numpy as np
 import time
+import torch._dynamo
+torch._dynamo.config.suppress_errors = True
+torch._dynamo.config.verbose=True
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(device)
@@ -19,7 +22,7 @@ st.sidebar.write("Here, the intension is not to generate meaningful sentences, w
 
 st.sidebar.write("This model was trained on a simple 600 KB text corpus titled: 'Gulliver's Travels'")
 
-no_of_chars = st.slider("Number of characters to be generated", 100, 2000, 1000)
+no_of_chars = st.slider("Number of characters to be generated", 10, 2000, 200)
 
 # Open the file in read mode
 with open('warpeace_input.txt', 'r') as file:
@@ -43,65 +46,89 @@ itos = {value: key for key, value in stoi.items()}
 vocab_size = len(stoi)      
 # block_size = 15
 
-man_seed = st.slider("Select the seed", 100, 2000, 1000)
+man_seed = st.slider("Select the seed", 10, 2000, 42)
 
 
 g = torch.Generator()
 g.manual_seed(man_seed)
 
+# def generate_text(model, inp, itos, stoi, block_size, max_len=no_of_chars):
+#     """
+#     Generate text at the word level with line breaks after periods.
+
+#     Parameters:
+#     - model: Trained PyTorch model
+#     - inp: Initial input (seed) words as a string
+#     - itos: Dictionary mapping integer indices to words (int-to-string)
+#     - stoi: Dictionary mapping words to integer indices (string-to-int)
+#     - block_size: Number of words in the context window
+#     - max_len: Maximum number of words to generate
+#     """
+#     # Initialize the context with block_size padding (index 0)
+#     context = [0] * block_size
+
+#     # Split input into words
+#     inp_words = inp.split()
+
+#     # Fill the context with the input words
+#     if len(inp_words) <= block_size:
+#         for i in range(len(inp_words)):
+#             context[i] = stoi.get(inp_words[i], 0)  # Default to 0 if word not found
+#     else:
+#         # Use only the last 'block_size' words if input is longer
+#         for j, word in enumerate(inp_words[-block_size:]):
+#             context[j] = stoi.get(word, 0)
+
+#     # Generate words iteratively
+#     generated_text = []
+#     for _ in range(max_len):
+#         # Convert context to a tensor and pass it through the model
+#         x = torch.tensor(context).view(1, -1).to(device)
+#         y_pred = model(x)
+
+#         # Sample the next word's index from the model's predictions
+#         ix = torch.distributions.categorical.Categorical(logits=y_pred).sample().item()
+
+#         # Map the index back to a word
+#         if ix in itos:
+#             word = itos[ix]
+#             generated_text.append(word)
+
+#             # Update context with the new word
+#             context = context[1:] + [ix]
+
+#             # Add a newline whenever a period is predicted
+#             if word == ".":
+#                 generated_text.append("\n")
+
+#     # Join the generated words into a single string and clean up whitespace
+#     generated_output = ' '.join(generated_text).replace(" \n", "\n").replace("\n ", "\n").strip()
+
+#     return generated_output
+
 def generate_text(model, inp, itos, stoi, block_size, max_len=no_of_chars):
-    """
-    Generate text at the word level with line breaks after periods.
 
-    Parameters:
-    - model: Trained PyTorch model
-    - inp: Initial input (seed) words as a string
-    - itos: Dictionary mapping integer indices to words (int-to-string)
-    - stoi: Dictionary mapping words to integer indices (string-to-int)
-    - block_size: Number of words in the context window
-    - max_len: Maximum number of words to generate
-    """
-    # Initialize the context with block_size padding (index 0)
     context = [0] * block_size
-
-    # Split input into words
-    inp_words = inp.split()
-
-    # Fill the context with the input words
-    if len(inp_words) <= block_size:
-        for i in range(len(inp_words)):
-            context[i] = stoi.get(inp_words[i], 0)  # Default to 0 if word not found
+    # inp = inp.lower()
+    if len(inp) <= block_size:
+      for i in range(len(inp)):
+        context[i] = stoi[inp[i]]
     else:
-        # Use only the last 'block_size' words if input is longer
-        for j, word in enumerate(inp_words[-block_size:]):
-            context[j] = stoi.get(word, 0)
+      j = 0
+      for i in range(len(inp)-block_size,len(inp)):
+        context[j] = stoi[inp[i]]
+        j+=1
 
-    # Generate words iteratively
-    generated_text = []
-    for _ in range(max_len):
-        # Convert context to a tensor and pass it through the model
+    name = ''
+    for i in range(max_len):
         x = torch.tensor(context).view(1, -1).to(device)
         y_pred = model(x)
-
-        # Sample the next word's index from the model's predictions
         ix = torch.distributions.categorical.Categorical(logits=y_pred).sample().item()
-
-        # Map the index back to a word
         if ix in itos:
-            word = itos[ix]
-            generated_text.append(word)
-
-            # Update context with the new word
-            context = context[1:] + [ix]
-
-            # Add a newline whenever a period is predicted
-            if word == ".":
-                generated_text.append("\n")
-
-    # Join the generated words into a single string and clean up whitespace
-    generated_output = ' '.join(generated_text).replace(" \n", "\n").replace("\n ", "\n").strip()
-
-    return generated_output
+          ch = itos[ix]
+          name += ch
+          context = context[1:] + [ix]
+    return name
 
 # Function to simulate typing effect
 def type_text(text):
@@ -136,13 +163,13 @@ class NextWordMLP(nn.Module):
 # emb_dim = 10
 emb_dim = st.selectbox(
   'Select embedding size',
-  (64, 128), index=4)
+  (64, 128), index=0)
 emb = torch.nn.Embedding(vocab_size, emb_dim)
 
 # block_size = 15
 block_size = st.selectbox(
   'Select context length',
-  (5, 10), index=0)
+  (5, 10, 15), index=0)
 
 activation_fn = st.selectbox(
   'Select activation function',
@@ -158,7 +185,21 @@ btn = st.button("Generate")
 if btn:
     st.subheader("Seed Text")
     type_text(inp)
-    model.load_state_dict(torch.load("trained_models/model_emb{embedding_size}_ctx{context_length}_act{activation_fn.__name__}.pth", map_location = device))
+    
+    # model._orig_mod.load_state_dict(torch.load("trained_models/model_emb"+str(emb_dim)+"_ctx"+str(block_size)+"_act"+str(activation_fn.__name__)+".pth", map_location = device))
+    
+    state_dict = torch.load(
+        f"trained_models/model_emb{emb_dim}_ctx{block_size}_act{activation_fn.__name__}.pth", 
+        map_location=device
+    )
+
+    # Check if the model is compiled, and load the state_dict accordingly
+    if hasattr(model, "_orig_mod"):  # Handle compiled model case
+        model._orig_mod.load_state_dict(state_dict)
+    else:  # For standard, non-compiled models
+        model.load_state_dict(state_dict)
+    
+    
     gen_txt = generate_text(model, inp, itos, stoi, block_size, no_of_chars)
     st.subheader("Generated Text")
     print(inp+gen_txt)
